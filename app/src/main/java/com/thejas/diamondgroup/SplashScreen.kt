@@ -16,8 +16,13 @@ class SplashScreen : AppCompatActivity() {
 
         Handler().postDelayed({
             if (sessionManager.isLoggedIn()) {
-                // User is already logged in, redirect to MainActivity
-                val intent = Intent(this@SplashScreen, MainActivity2::class.java)
+                // Check the user type and redirect accordingly
+                val userType = sessionManager.getUsername()
+                val intent = if (userType == "admin") {
+                    Intent(this@SplashScreen, MainActivity2::class.java)
+                } else {
+                    Intent(this@SplashScreen, OtherPerson::class.java)
+                }
                 startActivity(intent)
             } else {
                 // User is not logged in, show LoginScreen

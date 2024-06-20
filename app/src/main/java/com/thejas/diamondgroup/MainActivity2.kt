@@ -1,10 +1,15 @@
 package com.thejas.diamondgroup
-
+import com.opencsv.CSVReader
+import java.io.FileReader
+import java.io.IOException
+import java.io.InputStreamReader
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
+import android.widget.Button
 import android.widget.Toast
 import androidx.appcompat.widget.SearchView
 import androidx.appcompat.app.AlertDialog
@@ -18,6 +23,12 @@ import androidx.navigation.ui.setupWithNavController
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.navigation.NavigationView
+import com.google.firebase.database.DatabaseReference
+import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.ktx.database
+import com.google.firebase.ktx.Firebase
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import com.thejas.diamondgroup.databinding.ActivityMain2Binding
 
 class MainActivity2 : AppCompatActivity() {
@@ -32,28 +43,41 @@ class MainActivity2 : AppCompatActivity() {
     private lateinit var sessionManager: SessionManager
     private lateinit var adapter: MyAdapter
 
+    private lateinit var database: DatabaseReference
+
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         sessionManager = SessionManager(this)
         binding = ActivityMain2Binding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        val btnImport: Button = findViewById(R.id.btn_import)
+        database = FirebaseDatabase.getInstance().reference
+        val btnclear: Button = findViewById(R.id.btn_clear)
+        btnclear.setOnClickListener{
+            Toast.makeText(this@MainActivity2,"Data Cleared",Toast.LENGTH_SHORT).show()
+            newArrayList.clear()
+            tempArrayList.clear()
+            adapter.notifyDataSetChanged()
+
+            saveDataToFirebase(newArrayList)
+        }
+        btnImport.setOnClickListener {
+            val intent = Intent(Intent.ACTION_GET_CONTENT)
+            intent.type = "*/*"
+            startActivityForResult(intent, 1)
+        }
+
         newArrayList = arrayListOf()
         tempArrayList = arrayListOf()
-        number = arrayOf(
-            "MH123123", "MH123456", "MH789012", "KA012345", "TN987654", "KL567890", // Existing numbers
-            "KA567890", "TN123456", "KL098765", "MH789123", "KA345678", // More random numbers
-            "TN543210", "KL901234", "MH567890", "KA654321", "TN234567", // Even more random numbers
-            "MH234567", "KA789012", "TN901234", "KL345678" // Additional random numbers
-        )
 
-        getUserdata()
+        // Load data from SharedPreferences
+        loadDataFromFirebase()
 
         newRecylerview = findViewById(R.id.recyclerView)
         newRecylerview.layoutManager = LinearLayoutManager(this)
         newRecylerview.setHasFixedSize(true)
-
-
 
         adapter = MyAdapter(newArrayList)
         newRecylerview.adapter = adapter
@@ -70,7 +94,6 @@ class MainActivity2 : AppCompatActivity() {
         setupActionBarWithNavController(navController, appBarConfiguration)
         navView.setupWithNavController(navController)
 
-        // Handle search query in the SearchView
         val searchView = findViewById<SearchView>(R.id.searchView)
         searchView.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
             override fun onQueryTextSubmit(query: String?): Boolean {
@@ -81,13 +104,9 @@ class MainActivity2 : AppCompatActivity() {
                 if (newText.isNullOrEmpty()) {
                     adapter.updateList(newArrayList)
 
-                    getUserdata()
+                    loadDataFromFirebase()
                     adapter = MyAdapter(newArrayList)
                     newRecylerview.adapter = adapter
-
-
-             //       adapter.updateList(newArrayList)
-                //    Log.d("MainActivity2", "Array: $newArrayList")
                     // Show all vehicles if the search query is empty
                 } else {
                     val query = newText.toLowerCase() // Convert the search query to lowercase
@@ -98,12 +117,25 @@ class MainActivity2 : AppCompatActivity() {
                         }
                     }
                     adapter.updateList(tempArrayList)
-
                 }
                 return true
             }
         })
     }
+
+    private fun loadDataFromSharedPreferences() {
+        val sharedPreferences = getSharedPreferences("MyAppPrefs", MODE_PRIVATE)
+        val gson = Gson()
+        val json = sharedPreferences.getString("vehicle_data", null)
+        val type = object : TypeToken<ArrayList<Vehicles>>() {}.type
+        if (json != null) {
+            newArrayList = gson.fromJson(json, type)
+        } else {
+            newArrayList = arrayListOf()
+        }
+        tempArrayList.addAll(newArrayList) // Initially populate tempArrayList with all data
+    }
+
 
     private fun getUserdata() {
         for (i in number.indices) {
@@ -112,6 +144,99 @@ class MainActivity2 : AppCompatActivity() {
         }
         tempArrayList.addAll(newArrayList) // Initially populate tempArrayList with all data
     }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 1 && resultCode == RESULT_OK) {
+            val filePath: Uri? = data?.data
+            if (filePath != null) {
+                try {
+                    val inputStream = contentResolver.openInputStream(filePath)
+                    val reader = CSVReader(InputStreamReader(inputStream))
+                    var nextLine: Array<String>?
+                    // Read the header row to get column indices
+                    val header = reader.readNext()
+                    val vehIdIndex = header.indexOf("Veh ID")
+
+                    // Read the rest of the rows
+                    while (reader.readNext().also { nextLine = it } != null) {
+                        if (vehIdIndex != -1) {
+                            val vehicleNumber = nextLine!![vehIdIndex] // Use the dynamic index for "Veh ID"
+                            val vehicle = Vehicles(vehicleNumber)
+                            newArrayList.add(vehicle)
+                        }
+                    }
+
+                    // Save the new data to SharedPreferences
+                    saveDataToFirebase(newArrayList)
+                    // Notify the adapter about the data change
+                    adapter.notifyDataSetChanged()
+                    Toast.makeText(this@MainActivity2, "Data Imported", Toast.LENGTH_SHORT).show()
+                } catch (e: IOException) {
+                    e.printStackTrace()
+                    Toast.makeText(this, "Failed to read file", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                Toast.makeText(this, "File path is null", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+
+    private fun saveDataToSharedPreferences(data: ArrayList<Vehicles>) {
+        val sharedPreferences = getSharedPreferences("MyAppPrefs", MODE_PRIVATE)
+        val editor = sharedPreferences.edit()
+        val gson = Gson()
+        val json = gson.toJson(data)
+        editor.putString("vehicle_data", json)
+        editor.apply()
+    }
+
+    private fun saveDataToFirebase(data: ArrayList<Vehicles>) {
+        database.child("vehicle_data").setValue(data)
+            .addOnSuccessListener {
+                Toast.makeText(this, "Data saved to Firebase", Toast.LENGTH_SHORT).show()
+            }
+            .addOnFailureListener {
+                Toast.makeText(this, "Failed to save data to Firebase", Toast.LENGTH_SHORT).show()
+            }
+    }
+
+    private fun loadDataFromFirebase() {
+        database.child("vehicle_data").get().addOnSuccessListener { snapshot ->
+            if (snapshot.exists()) {
+                // Deserialize the data from Firebase snapshot
+                val gson = Gson()
+                val json = gson.toJson(snapshot.value)
+                val type = object : TypeToken<ArrayList<Vehicles>>() {}.type
+                val loadedData: ArrayList<Vehicles> = gson.fromJson(json, type)
+
+                // Clear the existing lists and add the loaded data
+                newArrayList.clear()
+                tempArrayList.clear()
+
+                newArrayList.addAll(loadedData)
+                tempArrayList.addAll(loadedData)
+
+                // Notify the adapter about the data change
+                adapter.notifyDataSetChanged()
+
+                Toast.makeText(this, "Data loaded from Firebase", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "No data found in Firebase", Toast.LENGTH_SHORT).show()
+            }
+        }.addOnFailureListener {
+            Toast.makeText(this, "Failed to load data from Firebase", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+
+
+
+
+
+
+
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         // Inflate the menu; this adds items to the action bar if it is present.
@@ -124,7 +249,7 @@ class MainActivity2 : AppCompatActivity() {
             R.id.action_settings -> {
                 // Handle logout here
                 // For now, let's show a toast message
-                sessionManager.setLoggedIn(false)
+                sessionManager.setLoggedIn(false,"admin")
                 showLogoutConfirmationDialog()
                 return true
             }
@@ -138,7 +263,7 @@ class MainActivity2 : AppCompatActivity() {
         alertDialogBuilder.setMessage("Are you sure you want to logout?")
         alertDialogBuilder.setPositiveButton("Yes") { dialog, which ->
             // User clicked "Yes", perform logout
-            sessionManager.setLoggedIn(false)
+            sessionManager.setLoggedIn(false,"admin")
 
             // Redirect to the login screen
             val intent = Intent(this@MainActivity2, LoginScreen::class.java)
@@ -160,3 +285,4 @@ class MainActivity2 : AppCompatActivity() {
         return navController.navigateUp(appBarConfiguration) || super.onSupportNavigateUp()
     }
 }
+

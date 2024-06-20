@@ -1,3 +1,5 @@
 package com.thejas.diamondgroup
 
-data class Vehicles(var number: String)
+data class Vehicles(
+    var number: String = ""
+)
